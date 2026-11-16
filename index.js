@@ -39,7 +39,17 @@ const client = new Client({
   ],
 });
 
-// Define /say and /tts commands
+// Helper for language choices
+const languageChoices = [
+  { name: 'English', value: 'en' },
+  { name: 'Arabic', value: 'ar' },
+  { name: 'French', value: 'fr' },
+  { name: 'Spanish', value: 'es' },
+  { name: 'German', value: 'de' },
+  { name: 'Japanese', value: 'ja' },
+];
+
+// Define slash commands: /say, /tell, /tts
 const commands = [
   new SlashCommandBuilder()
     .setName('say')
@@ -49,22 +59,40 @@ const commands = [
         .setName('text')
         .setDescription('The text you want the bot to say')
         .setRequired(true)
-        .setMaxLength(200)
+        .setMaxLength(250)
     )
     .addStringOption(option =>
       option
         .setName('language')
         .setDescription('Voice language (default: English)')
         .setRequired(false)
-        .addChoices(
-          { name: 'English', value: 'en' },
-          { name: 'Arabic', value: 'ar' },
-          { name: 'French', value: 'fr' },
-          { name: 'Spanish', value: 'es' },
-          { name: 'German', value: 'de' },
-          { name: 'Japanese', value: 'ja' }
-        )
+        .addChoices(...languageChoices)
     ),
+
+  new SlashCommandBuilder()
+    .setName('tell')
+    .setDescription('Calls out someone by name in voice channel and delivers your message')
+    .addUserOption(option =>
+      option
+        .setName('user')
+        .setDescription('The person you want to talk to')
+        .setRequired(true)
+    )
+    .addStringOption(option =>
+      option
+        .setName('text')
+        .setDescription('What you want to tell them')
+        .setRequired(true)
+        .setMaxLength(250)
+    )
+    .addStringOption(option =>
+      option
+        .setName('language')
+        .setDescription('Voice language (default: English)')
+        .setRequired(false)
+        .addChoices(...languageChoices)
+    ),
+
   new SlashCommandBuilder()
     .setName('tts')
     .setDescription('Speaks your text in your voice channel and leaves')
@@ -73,21 +101,14 @@ const commands = [
         .setName('text')
         .setDescription('The text you want the bot to say')
         .setRequired(true)
-        .setMaxLength(200)
+        .setMaxLength(250)
     )
     .addStringOption(option =>
       option
         .setName('language')
         .setDescription('Voice language (default: English)')
         .setRequired(false)
-        .addChoices(
-          { name: 'English', value: 'en' },
-          { name: 'Arabic', value: 'ar' },
-          { name: 'French', value: 'fr' },
-          { name: 'Spanish', value: 'es' },
-          { name: 'German', value: 'de' },
-          { name: 'Japanese', value: 'ja' }
-        )
+        .addChoices(...languageChoices)
     ),
 ].map(cmd => cmd.toJSON());
 
@@ -113,12 +134,15 @@ function downloadAudio(url, destPath) {
   });
 }
 
-client.once('ready', async () => {
+// Sleep helper
+const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+
+client.once('clientReady', async () => {
   console.log(`✅ Logged in as ${client.user.tag}!`);
 
   const rest = new REST({ version: '10' }).setToken(process.env.DISCORD_TOKEN);
   try {
-    console.log('🔄 Registering slash commands...');
+    console.log('🔄 Registering slash commands (/say, /tell, /tts)...');
     await rest.put(Routes.applicationCommands(client.user.id), {
       body: commands,
     });
@@ -132,35 +156,69 @@ client.on('interactionCreate', async interaction => {
   if (!interaction.isChatInputCommand()) return;
 
   const { commandName } = interaction;
-  if (commandName !== 'say' && commandName !== 'tts') return;
+  if (commandName !== 'say' && commandName !== 'tell' && commandName !== 'tts') return;
 
   const text = interaction.options.getString('text');
   const lang = interaction.options.getString('language') || 'en';
 
-  const memberVoiceChannel = interaction.member?.voice?.channel;
-  if (!memberVoiceChannel) {
-    return interaction.reply({
-      content: '❌ You must be inside a voice channel to use this command!',
-      ephemeral: true,
-    });
+  let voiceChannel = null;
+  let spokenText = text;
+  let replyMessage = '';
+
+  if (commandName === 'tell') {
+    const targetUser = interaction.options.getUser('user');
+    const targetMember = interaction.options.getMember('user');
+    
+    // Clean, natural display name to call out
+    const nameToCall = targetMember?.displayName || targetUser.globalName || targetUser.username;
+    spokenText = `${nameToCall}, ${text}`;
+
+    // Prefer joining target's voice channel; fallback to author's voice channel
+    if (targetMember?.voice?.channel) {
+      voiceChannel = targetMember.voice.channel;
+    } else if (interaction.member?.voice?.channel) {
+      voiceChannel = interaction.member.voice.channel;
+    } else {
+      return interaction.reply({
+        content: `❌ Neither you nor **${nameToCall}** is currently in a voice channel!`,
+        ephemeral: true,
+      });
+    }
+
+    replyMessage = `📣 Calling **${nameToCall}** in <#${voiceChannel.id}>: "${text}"`;
+  } else {
+    // /say or /tts
+    voiceChannel = interaction.member?.voice?.channel;
+    if (!voiceChannel) {
+      return interaction.reply({
+        content: '❌ You must be in a voice channel to use this command!',
+        ephemeral: true,
+      });
+    }
+
+    spokenText = text;
+    replyMessage = `🗣️ Speaking in <#${voiceChannel.id}>: "${text}"`;
   }
 
-  // Check bot permissions in target voice channel
-  const permissions = memberVoiceChannel.permissionsFor(client.user);
+  // Check bot permissions in voice channel
+  const permissions = voiceChannel.permissionsFor(client.user);
   if (!permissions.has('Connect') || !permissions.has('Speak')) {
     return interaction.reply({
-      content: '❌ I do not have permission to join or speak in your voice channel!',
+      content: '❌ I do not have permission to Connect and Speak in that voice channel!',
       ephemeral: true,
     });
   }
 
   await interaction.deferReply();
 
-  const tempFilePath = path.join(__dirname, `temp_tts_${Date.now()}_${Math.random().toString(36).substring(7)}.mp3`);
+  const tempFilePath = path.join(
+    __dirname,
+    `temp_tts_${Date.now()}_${Math.random().toString(36).substring(7)}.mp3`
+  );
 
   try {
-    // 1. Get Google TTS URL
-    const audioUrl = googleTTS.getAudioUrl(text, {
+    // 1. Generate TTS Audio URL
+    const audioUrl = googleTTS.getAudioUrl(spokenText, {
       lang: lang,
       slow: false,
       host: 'https://translate.google.com',
@@ -169,14 +227,18 @@ client.on('interactionCreate', async interaction => {
     // 2. Download audio file
     await downloadAudio(audioUrl, tempFilePath);
 
-    // 3. Connect to user's voice channel
+    // 3. Connect to target voice channel
     const connection = joinVoiceChannel({
-      channelId: memberVoiceChannel.id,
-      guildId: memberVoiceChannel.guild.id,
-      adapterCreator: memberVoiceChannel.guild.voiceAdapterCreator,
+      channelId: voiceChannel.id,
+      guildId: voiceChannel.guild.id,
+      adapterCreator: voiceChannel.guild.voiceAdapterCreator,
     });
 
+    // Wait until connection is fully ready
     await entersState(connection, VoiceConnectionStatus.Ready, 15_000);
+
+    // Short 600ms pause so Discord's audio receiver connects smoothly before first word
+    await sleep(600);
 
     // 4. Create and play audio resource
     const player = createAudioPlayer();
@@ -185,9 +247,9 @@ client.on('interactionCreate', async interaction => {
     player.play(resource);
     connection.subscribe(player);
 
-    await interaction.editReply(`🗣️ **Speaking:** "${text}" in <#${memberVoiceChannel.id}>`);
+    await interaction.editReply(replyMessage);
 
-    // 5. When playback finishes, disconnect and clean up
+    // 5. Cleanup when audio finishes
     player.on(AudioPlayerStatus.Idle, () => {
       setTimeout(() => {
         if (connection.state.status !== VoiceConnectionStatus.Destroyed) {
@@ -209,7 +271,7 @@ client.on('interactionCreate', async interaction => {
       }
     });
 
-    // Fallback safety timeout (disconnect after 45s if idle event fails)
+    // Safety timeout (disconnect after 45s maximum)
     setTimeout(() => {
       if (connection.state.status !== VoiceConnectionStatus.Destroyed) {
         connection.destroy();
