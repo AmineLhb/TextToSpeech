@@ -118,6 +118,32 @@ function downloadAudio(url, destPath) {
 
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
+// Phonetic normalizer for Darija / Arabizi & English acronym collisions
+function normalizeTextForSpeech(text, lang) {
+  if (!lang || lang === 'en') {
+    let clean = text;
+    // Fix words that Google TTS confuses with English government/corporate acronyms
+    clean = clean
+      .replace(/\bnsa\b/gi, 'nssa')
+      .replace(/\bnta\b/gi, 'ntta')
+      .replace(/\bnti\b/gi, 'ntti')
+      .replace(/\bmsa\b/gi, 'mssa')
+      .replace(/\bdia\b/gi, 'diya');
+
+    // Convert Arabizi numbers (7 -> h, 9 -> q, 5 -> kh, 3 -> aa)
+    // so the bot speaks Arabic sounds instead of saying "seven", "three", etc.
+    clean = clean
+      .replace(/([a-zA-Z])3/g, '$1aa')
+      .replace(/3([a-zA-Z])/g, 'aa$1')
+      .replace(/7/g, 'h')
+      .replace(/9/g, 'q')
+      .replace(/5/g, 'kh');
+
+    return clean;
+  }
+  return text;
+}
+
 // Speech Queue: ensures rapid back-to-back /say or /tell commands never collide
 let ttsQueue = Promise.resolve();
 
@@ -134,7 +160,9 @@ async function playTTS(channelId, text, lang) {
   const channel = await client.channels.fetch(channelId);
   const tempPath = path.join(__dirname, `temp_tts_${Date.now()}_${Math.random().toString(36).substring(7)}.mp3`);
   
-  const audioUrl = googleTTS.getAudioUrl(text, {
+  const textToSpeak = normalizeTextForSpeech(text, lang);
+
+  const audioUrl = googleTTS.getAudioUrl(textToSpeak, {
     lang: lang || 'en',
     slow: false,
     host: 'https://translate.google.com',
