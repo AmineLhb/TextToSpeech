@@ -206,12 +206,16 @@ client.on('interactionCreate', async interaction => {
     });
     await downloadAudio(audioUrl, tempFilePath);
 
-    // 2. Connect to voice cleanly
-    console.log(`[TTS] Connecting to voice channel ${voiceChannel.name} (${voiceChannel.id})...`);
+    // 2. Fetch full live channel & guild directly from client
+    const targetChannelId = voiceChannel.id;
+    const guild = client.guilds.cache.get(interaction.guildId) || (await client.guilds.fetch(interaction.guildId));
+    const channel = await client.channels.fetch(targetChannelId);
+
+    console.log(`[TTS] Connecting to voice channel ${channel.name} (${channel.id})...`);
     connection = joinVoiceChannel({
-      channelId: voiceChannel.id,
-      guildId: voiceChannel.guild.id,
-      adapterCreator: voiceChannel.guild.voiceAdapterCreator,
+      channelId: channel.id,
+      guildId: guild.id,
+      adapterCreator: guild.voiceAdapterCreator,
       selfDeaf: true,
     });
 
