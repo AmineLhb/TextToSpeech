@@ -5,6 +5,7 @@ const {
   REST,
   Routes,
   SlashCommandBuilder,
+  PermissionsBitField,
 } = require('discord.js');
 const {
   joinVoiceChannel,
@@ -21,7 +22,7 @@ const path = require('path');
 const https = require('https');
 const http = require('http');
 
-// Lightweight health-check web server (keeps 24/7 cloud hosts alive permanently)
+// Health-check web server
 const port = process.env.PORT || 7860;
 http
   .createServer((req, res) => {
@@ -40,7 +41,6 @@ const client = new Client({
   ],
 });
 
-// Helper for language choices
 const languageChoices = [
   { name: 'English', value: 'en' },
   { name: 'Arabic', value: 'ar' },
@@ -50,70 +50,41 @@ const languageChoices = [
   { name: 'Japanese', value: 'ja' },
 ];
 
-// Define slash commands: /say, /tell, /tts
 const commands = [
   new SlashCommandBuilder()
     .setName('say')
     .setDescription('Speaks your text in your voice channel and leaves')
-    .addStringOption(option =>
-      option
-        .setName('text')
-        .setDescription('The text you want the bot to say')
-        .setRequired(true)
-        .setMaxLength(250)
+    .addStringOption(opt =>
+      opt.setName('text').setDescription('The text to speak').setRequired(true).setMaxLength(250)
     )
-    .addStringOption(option =>
-      option
-        .setName('language')
-        .setDescription('Voice language (default: English)')
-        .setRequired(false)
-        .addChoices(...languageChoices)
+    .addStringOption(opt =>
+      opt.setName('language').setDescription('Voice language').setRequired(false).addChoices(...languageChoices)
     ),
 
   new SlashCommandBuilder()
     .setName('tell')
     .setDescription('Calls out someone by name in voice channel and delivers your message')
-    .addUserOption(option =>
-      option
-        .setName('user')
-        .setDescription('The person you want to talk to')
-        .setRequired(true)
+    .addUserOption(opt =>
+      opt.setName('user').setDescription('The person to talk to').setRequired(true)
     )
-    .addStringOption(option =>
-      option
-        .setName('text')
-        .setDescription('What you want to tell them')
-        .setRequired(true)
-        .setMaxLength(250)
+    .addStringOption(opt =>
+      opt.setName('text').setDescription('What to tell them').setRequired(true).setMaxLength(250)
     )
-    .addStringOption(option =>
-      option
-        .setName('language')
-        .setDescription('Voice language (default: English)')
-        .setRequired(false)
-        .addChoices(...languageChoices)
+    .addStringOption(opt =>
+      opt.setName('language').setDescription('Voice language').setRequired(false).addChoices(...languageChoices)
     ),
 
   new SlashCommandBuilder()
     .setName('tts')
     .setDescription('Speaks your text in your voice channel and leaves')
-    .addStringOption(option =>
-      option
-        .setName('text')
-        .setDescription('The text you want the bot to say')
-        .setRequired(true)
-        .setMaxLength(250)
+    .addStringOption(opt =>
+      opt.setName('text').setDescription('The text to speak').setRequired(true).setMaxLength(250)
     )
-    .addStringOption(option =>
-      option
-        .setName('language')
-        .setDescription('Voice language (default: English)')
-        .setRequired(false)
-        .addChoices(...languageChoices)
+    .addStringOption(opt =>
+      opt.setName('language').setDescription('Voice language').setRequired(false).addChoices(...languageChoices)
     ),
 ].map(cmd => cmd.toJSON());
 
-// Download audio helper
 function downloadAudio(url, destPath) {
   return new Promise((resolve, reject) => {
     const file = fs.createWriteStream(destPath);
@@ -135,7 +106,6 @@ function downloadAudio(url, destPath) {
   });
 }
 
-// Sleep helper
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
 client.once('clientReady', async () => {
@@ -169,26 +139,22 @@ client.on('interactionCreate', async interaction => {
   if (commandName === 'tell') {
     const targetUser = interaction.options.getUser('user');
     const targetMember = interaction.options.getMember('user');
-    
-    // Clean, natural display name to call out
     const nameToCall = targetMember?.displayName || targetUser.globalName || targetUser.username;
     spokenText = `${nameToCall}, ${text}`;
 
-    // Prefer joining target's voice channel; fallback to author's voice channel
     if (targetMember?.voice?.channel) {
       voiceChannel = targetMember.voice.channel;
     } else if (interaction.member?.voice?.channel) {
       voiceChannel = interaction.member.voice.channel;
     } else {
       return interaction.reply({
-        content: `❌ Neither you nor **${nameToCall}** is currently in a voice channel!`,
+        content: `❌ Neither you nor **${nameToCall}** is in a voice channel!`,
         ephemeral: true,
       });
     }
 
     replyMessage = `📣 Calling **${nameToCall}** in <#${voiceChannel.id}>: "${text}"`;
   } else {
-    // /say or /tts
     voiceChannel = interaction.member?.voice?.channel;
     if (!voiceChannel) {
       return interaction.reply({
@@ -201,11 +167,12 @@ client.on('interactionCreate', async interaction => {
     replyMessage = `🗣️ Speaking in <#${voiceChannel.id}>: "${text}"`;
   }
 
-  // Check bot permissions in voice channel
-  const permissions = voiceChannel.permissionsFor(client.user);
-  if (!permissions.has('Connect') || !permissions.has('Speak')) {
+  // Check bot permissions
+  const botMember = interaction.guild.members.me;
+  const permissions = voiceChannel.permissionsFor(botMember);
+  if (!permissions.has(PermissionsBitField.Flags.Connect) || !permissions.has(PermissionsBitField.Flags.Speak)) {
     return interaction.reply({
-      content: '❌ I do not have permission to Connect and Speak in that voice channel!',
+      content: '❌ I do not have permission to Connect & Speak in that voice channel! Please give my role the "Connect" & "Speak" permission.',
       ephemeral: true,
     });
   }
@@ -220,66 +187,59 @@ client.on('interactionCreate', async interaction => {
   let connection = null;
 
   try {
-    // 1. Generate TTS Audio URL
+    console.log(`[TTS] Request: "${spokenText}" (${lang}) in channel ${voiceChannel.name} (${voiceChannel.id})`);
+
+    // 1. Download TTS Audio
     const audioUrl = googleTTS.getAudioUrl(spokenText, {
       lang: lang,
       slow: false,
       host: 'https://translate.google.com',
     });
-
-    // 2. Download audio file
     await downloadAudio(audioUrl, tempFilePath);
+    console.log(`[TTS] Audio downloaded successfully.`);
 
-    // 3. Clean up any stale connection first
-    const oldConnection = getVoiceConnection(voiceChannel.guild.id);
+    // 2. Clean up any stale connection first
+    const oldConnection = getVoiceConnection(interaction.guild.id);
     if (oldConnection) {
       try {
         oldConnection.destroy();
       } catch (e) {}
-      await sleep(300);
+      await sleep(200);
     }
 
-    // 4. Connect to target voice channel with selfDeaf
+    // 3. Connect to voice
+    console.log(`[TTS] Connecting to voice channel...`);
     connection = joinVoiceChannel({
       channelId: voiceChannel.id,
-      guildId: voiceChannel.guild.id,
-      adapterCreator: voiceChannel.guild.voiceAdapterCreator,
+      guildId: interaction.guild.id,
+      adapterCreator: interaction.guild.voiceAdapterCreator,
       selfDeaf: true,
     });
 
-    // Handle sudden disconnects gracefully
-    connection.on(VoiceConnectionStatus.Disconnected, async () => {
-      try {
-        await Promise.race([
-          entersState(connection, VoiceConnectionStatus.Signalling, 5_000),
-          entersState(connection, VoiceConnectionStatus.Connecting, 5_000),
-        ]);
-      } catch (error) {
-        try {
-          connection.destroy();
-        } catch (e) {}
-      }
+    connection.on('stateChange', (oldState, newState) => {
+      console.log(`[VOICE STATE] ${oldState.status} -> ${newState.status}`);
     });
 
-    // Wait until connection is ready
-    if (connection.state.status !== VoiceConnectionStatus.Ready) {
-      await entersState(connection, VoiceConnectionStatus.Ready, 20_000);
-    }
+    // Wait up to 10 seconds for Ready state
+    await entersState(connection, VoiceConnectionStatus.Ready, 10_000);
+    console.log(`[TTS] Voice connection READY.`);
 
-    // Short buffer for audio socket to stabilize
-    await sleep(500);
+    // Short buffer so Discord audio pipeline is fully active
+    await sleep(400);
 
-    // 5. Create and play audio resource
+    // 4. Play audio
     const player = createAudioPlayer();
     const resource = createAudioResource(tempFilePath);
 
     player.play(resource);
     connection.subscribe(player);
+    console.log(`[TTS] Audio playing...`);
 
     await interaction.editReply(replyMessage);
 
-    // 6. Cleanup when audio finishes
+    // 5. Cleanup when idle
     player.on(AudioPlayerStatus.Idle, () => {
+      console.log(`[TTS] Finished speaking, disconnecting.`);
       setTimeout(() => {
         try {
           if (connection && connection.state.status !== VoiceConnectionStatus.Destroyed) {
@@ -289,11 +249,11 @@ client.on('interactionCreate', async interaction => {
         if (fs.existsSync(tempFilePath)) {
           fs.unlinkSync(tempFilePath);
         }
-      }, 500);
+      }, 400);
     });
 
     player.on('error', error => {
-      console.error('Audio Player Error:', error);
+      console.error('[TTS Player Error]:', error);
       try {
         if (connection && connection.state.status !== VoiceConnectionStatus.Destroyed) {
           connection.destroy();
@@ -304,7 +264,7 @@ client.on('interactionCreate', async interaction => {
       }
     });
 
-    // Safety timeout (disconnect after 45s maximum)
+    // Fallback safety timeout (30 seconds)
     setTimeout(() => {
       try {
         if (connection && connection.state.status !== VoiceConnectionStatus.Destroyed) {
@@ -314,10 +274,10 @@ client.on('interactionCreate', async interaction => {
       if (fs.existsSync(tempFilePath)) {
         fs.unlinkSync(tempFilePath);
       }
-    }, 45_000);
+    }, 30_000);
 
   } catch (error) {
-    console.error('TTS Error:', error);
+    console.error('[TTS Catch Error]:', error);
     try {
       if (connection && connection.state.status !== VoiceConnectionStatus.Destroyed) {
         connection.destroy();
@@ -326,9 +286,16 @@ client.on('interactionCreate', async interaction => {
     if (fs.existsSync(tempFilePath)) {
       fs.unlinkSync(tempFilePath);
     }
-    await interaction.editReply({
-      content: `❌ Error speaking text: ${error.message}`,
-    });
+
+    if (error.name === 'AbortError' || error.message.includes('aborted')) {
+      await interaction.editReply({
+        content: `❌ **Voice Connection Timed Out!**\nDiscord blocked the bot from joining the voice channel. Make sure the bot's role (**Sme3ni ngollik**) has the **Administrator** permission in Server Settings > Roles so it is allowed to enter the channel!`,
+      });
+    } else {
+      await interaction.editReply({
+        content: `❌ Error speaking text: ${error.message}`,
+      });
+    }
   }
 });
 
