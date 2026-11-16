@@ -8,6 +8,7 @@ const {
 } = require('discord.js');
 const {
   joinVoiceChannel,
+  getVoiceConnection,
   createAudioPlayer,
   createAudioResource,
   AudioPlayerStatus,
@@ -216,6 +217,8 @@ client.on('interactionCreate', async interaction => {
     `temp_tts_${Date.now()}_${Math.random().toString(36).substring(7)}.mp3`
   );
 
+  let connection = null;
+
   try {
     // 1. Generate TTS Audio URL
     const audioUrl = googleTTS.getAudioUrl(spokenText, {
@@ -227,20 +230,46 @@ client.on('interactionCreate', async interaction => {
     // 2. Download audio file
     await downloadAudio(audioUrl, tempFilePath);
 
-    // 3. Connect to target voice channel
-    const connection = joinVoiceChannel({
+    // 3. Clean up any stale connection first
+    const oldConnection = getVoiceConnection(voiceChannel.guild.id);
+    if (oldConnection) {
+      try {
+        oldConnection.destroy();
+      } catch (e) {}
+      await sleep(300);
+    }
+
+    // 4. Connect to target voice channel with selfDeaf
+    connection = joinVoiceChannel({
       channelId: voiceChannel.id,
       guildId: voiceChannel.guild.id,
       adapterCreator: voiceChannel.guild.voiceAdapterCreator,
+      selfDeaf: true,
     });
 
-    // Wait until connection is fully ready
-    await entersState(connection, VoiceConnectionStatus.Ready, 15_000);
+    // Handle sudden disconnects gracefully
+    connection.on(VoiceConnectionStatus.Disconnected, async () => {
+      try {
+        await Promise.race([
+          entersState(connection, VoiceConnectionStatus.Signalling, 5_000),
+          entersState(connection, VoiceConnectionStatus.Connecting, 5_000),
+        ]);
+      } catch (error) {
+        try {
+          connection.destroy();
+        } catch (e) {}
+      }
+    });
 
-    // Short 600ms pause so Discord's audio receiver connects smoothly before first word
-    await sleep(600);
+    // Wait until connection is ready
+    if (connection.state.status !== VoiceConnectionStatus.Ready) {
+      await entersState(connection, VoiceConnectionStatus.Ready, 20_000);
+    }
 
-    // 4. Create and play audio resource
+    // Short buffer for audio socket to stabilize
+    await sleep(500);
+
+    // 5. Create and play audio resource
     const player = createAudioPlayer();
     const resource = createAudioResource(tempFilePath);
 
@@ -249,12 +278,14 @@ client.on('interactionCreate', async interaction => {
 
     await interaction.editReply(replyMessage);
 
-    // 5. Cleanup when audio finishes
+    // 6. Cleanup when audio finishes
     player.on(AudioPlayerStatus.Idle, () => {
       setTimeout(() => {
-        if (connection.state.status !== VoiceConnectionStatus.Destroyed) {
-          connection.destroy();
-        }
+        try {
+          if (connection && connection.state.status !== VoiceConnectionStatus.Destroyed) {
+            connection.destroy();
+          }
+        } catch (e) {}
         if (fs.existsSync(tempFilePath)) {
           fs.unlinkSync(tempFilePath);
         }
@@ -263,9 +294,11 @@ client.on('interactionCreate', async interaction => {
 
     player.on('error', error => {
       console.error('Audio Player Error:', error);
-      if (connection.state.status !== VoiceConnectionStatus.Destroyed) {
-        connection.destroy();
-      }
+      try {
+        if (connection && connection.state.status !== VoiceConnectionStatus.Destroyed) {
+          connection.destroy();
+        }
+      } catch (e) {}
       if (fs.existsSync(tempFilePath)) {
         fs.unlinkSync(tempFilePath);
       }
@@ -273,9 +306,11 @@ client.on('interactionCreate', async interaction => {
 
     // Safety timeout (disconnect after 45s maximum)
     setTimeout(() => {
-      if (connection.state.status !== VoiceConnectionStatus.Destroyed) {
-        connection.destroy();
-      }
+      try {
+        if (connection && connection.state.status !== VoiceConnectionStatus.Destroyed) {
+          connection.destroy();
+        }
+      } catch (e) {}
       if (fs.existsSync(tempFilePath)) {
         fs.unlinkSync(tempFilePath);
       }
@@ -283,6 +318,11 @@ client.on('interactionCreate', async interaction => {
 
   } catch (error) {
     console.error('TTS Error:', error);
+    try {
+      if (connection && connection.state.status !== VoiceConnectionStatus.Destroyed) {
+        connection.destroy();
+      }
+    } catch (e) {}
     if (fs.existsSync(tempFilePath)) {
       fs.unlinkSync(tempFilePath);
     }
