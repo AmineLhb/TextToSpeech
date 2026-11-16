@@ -22,7 +22,15 @@ const path = require('path');
 const https = require('https');
 const http = require('http');
 
-// Health-check web server
+// Global error handlers
+process.on('unhandledRejection', error => {
+  console.error('[Unhandled Rejection]:', error);
+});
+process.on('uncaughtException', error => {
+  console.error('[Uncaught Exception]:', error);
+});
+
+// Health-check server
 const port = process.env.PORT || 7860;
 http
   .createServer((req, res) => {
@@ -32,14 +40,6 @@ http
   .listen(port, () => {
     console.log(`📡 Health-check server listening on port ${port}`);
   });
-
-// Global process error handlers so the bot never crashes
-process.on('unhandledRejection', error => {
-  console.error('[Unhandled Rejection]:', error);
-});
-process.on('uncaughtException', error => {
-  console.error('[Uncaught Exception]:', error);
-});
 
 const client = new Client({
   intents: [
@@ -141,6 +141,19 @@ client.on('interactionCreate', async interaction => {
   const { commandName } = interaction;
   if (commandName !== 'say' && commandName !== 'tell' && commandName !== 'tts') return;
 
+  // Safe reply helper so interaction collisions never crash or break audio
+  const safeReply = async (content, ephemeral = false) => {
+    try {
+      if (interaction.deferred) {
+        await interaction.editReply(content);
+      } else if (!interaction.replied) {
+        await interaction.reply(typeof content === 'string' ? { content, ephemeral } : content);
+      }
+    } catch (e) {
+      console.warn('[SafeReply Skipped]:', e.message);
+    }
+  };
+
   const text = interaction.options.getString('text');
   const lang = interaction.options.getString('language') || 'en';
 
@@ -159,20 +172,14 @@ client.on('interactionCreate', async interaction => {
     } else if (interaction.member?.voice?.channel) {
       voiceChannel = interaction.member.voice.channel;
     } else {
-      return interaction.reply({
-        content: `❌ Neither you nor **${nameToCall}** is in a voice channel!`,
-        ephemeral: true,
-      });
+      return safeReply(`❌ Neither you nor **${nameToCall}** is in a voice channel!`, true);
     }
 
     replyMessage = `📣 Calling **${nameToCall}** in <#${voiceChannel.id}>: "${text}"`;
   } else {
     voiceChannel = interaction.member?.voice?.channel;
     if (!voiceChannel) {
-      return interaction.reply({
-        content: '❌ You must be in a voice channel to use this command!',
-        ephemeral: true,
-      });
+      return safeReply('❌ You must be in a voice channel to use this command!', true);
     }
 
     spokenText = text;
@@ -183,10 +190,14 @@ client.on('interactionCreate', async interaction => {
   const botMember = interaction.guild.members.me;
   const permissions = voiceChannel.permissionsFor(botMember);
   if (!permissions.has(PermissionsBitField.Flags.Connect) || !permissions.has(PermissionsBitField.Flags.Speak)) {
-    return interaction.reply({
-      content: '❌ I do not have permission to Connect & Speak in that voice channel! Please give my role the "Connect" & "Speak" permission.',
-      ephemeral: true,
-    });
+    return safeReply('❌ I do not have permission to Connect & Speak in that voice channel!', true);
+  }
+
+  // Acknowledge interaction quickly
+  try {
+    await interaction.deferReply();
+  } catch (e) {
+    console.warn('[Defer Warning]:', e.message);
   }
 
   const tempFilePath = path.join(
@@ -197,11 +208,6 @@ client.on('interactionCreate', async interaction => {
   let connection = null;
 
   try {
-    try {
-      await interaction.deferReply();
-    } catch (e) {
-      console.warn('Could not defer reply (interaction may have expired or been handled):', e.message);
-    }
     console.log(`[TTS] Request: "${spokenText}" (${lang}) in channel ${voiceChannel.name} (${voiceChannel.id})`);
 
     // 1. Download TTS Audio
@@ -231,15 +237,13 @@ client.on('interactionCreate', async interaction => {
       selfDeaf: true,
     });
 
-    connection.on('stateChange', (oldState, newState) => {
-      console.log(`[VOICE STATE] ${oldState.status} -> ${newState.status}`);
-    });
-
-    // Wait up to 10 seconds for Ready state
-    await entersState(connection, VoiceConnectionStatus.Ready, 10_000);
+    // Wait until Ready
+    if (connection.state.status !== VoiceConnectionStatus.Ready) {
+      await entersState(connection, VoiceConnectionStatus.Ready, 10_000);
+    }
     console.log(`[TTS] Voice connection READY.`);
 
-    // Short buffer so Discord audio pipeline is fully active
+    // Buffer for audio pipeline
     await sleep(400);
 
     // 4. Play audio
@@ -250,7 +254,7 @@ client.on('interactionCreate', async interaction => {
     connection.subscribe(player);
     console.log(`[TTS] Audio playing...`);
 
-    await interaction.editReply(replyMessage);
+    await safeReply(replyMessage);
 
     // 5. Cleanup when idle
     player.on(AudioPlayerStatus.Idle, () => {
@@ -302,15 +306,7 @@ client.on('interactionCreate', async interaction => {
       fs.unlinkSync(tempFilePath);
     }
 
-    if (error.name === 'AbortError' || error.message.includes('aborted')) {
-      await interaction.editReply({
-        content: `❌ **Voice Connection Timed Out!**\nDiscord blocked the bot from joining the voice channel. Make sure the bot's role (**Sme3ni ngollik**) has the **Administrator** permission in Server Settings > Roles so it is allowed to enter the channel!`,
-      });
-    } else {
-      await interaction.editReply({
-        content: `❌ Error speaking text: ${error.message}`,
-      });
-    }
+    await safeReply(`❌ Error speaking text: ${error.message}`);
   }
 });
 
