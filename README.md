@@ -1,56 +1,76 @@
-# Discord Text-to-Speech (TTS) Bot 🗣️
+# Sme3ni ngollik — Discord Text-to-Speech (TTS) Bot 🗣️
 
-A Discord bot that joins your voice channel when you use `/say [text]`, speaks your message out loud using Google Text-to-Speech, and immediately disconnects after finishing.
+![Sme3ni Banner](assets/banner_fullbleed.jpg)
 
-## 📁 Project Location
-`C:\Users\DELL LATITUDE 5450\.gemini\antigravity\scratch\discord-tts-bot`
+A sleek, lightweight Discord bot that joins voice channels, speaks out messages or calls out users with natural Google Text-to-Speech, and immediately disconnects when finished.
 
 ---
 
-## 🚀 Quick Setup Instructions
+## 🎙️ Slash Commands
 
-### 1. Create your Bot in Discord Developer Portal
-1. Go to the [Discord Developer Portal](https://discord.com/developers/applications).
-2. Click **"New Application"**, give it a name (e.g. `TTS Bot`), and click **Create**.
-3. In the left menu, go to **Bot**:
-   * Click **Reset Token** (or **Copy**) to get your **Bot Token**.
-   * Under **Privileged Gateway Intents**, turn **ON**:
-     * `Server Members Intent`
-     * `Message Content Intent`
-4. Click **Save Changes**.
-
-### 2. Add your Token to the Bot
-1. Open the file:
-   [`.env`](file:///C:/Users/DELL%20LATITUDE%205450/.gemini/antigravity/scratch/discord-tts-bot/.env)
-2. Replace `your_bot_token_here` with your copied token:
-   ```env
-   DISCORD_TOKEN=MTE5...
-   ```
-3. Save the file.
-
-### 3. Invite the Bot to Your Server
-1. In the Developer Portal, go to **OAuth2** > **URL Generator**.
-2. Under **Scopes**, select:
-   * `bot`
-   * `applications.commands`
-3. Under **Bot Permissions**, select:
-   * `Send Messages`
-   * `Connect`
-   * `Speak`
-   * `Use Slash Commands`
-4. Copy the generated URL at the bottom and open it in your browser to add the bot to your server (**Tarnished souls**).
-
-### 4. Run the Bot
-Double-click [`run.bat`](file:///C:/Users/DELL%20LATITUDE%205450/.gemini/antigravity/scratch/discord-tts-bot/run.bat) or run in terminal:
-```bash
-node index.js
+### 1. `/say [text] [language]`
+Speaks your message in your current voice channel:
+```text
+/say text: Hello everyone in the server!
+/say text: Bonjour tout le monde language: French
+/say text: Marhba bikom language: Arabic
 ```
 
+### 2. `/tell [user] [text] [language]`
+Mentions someone, calls them out by name in their voice channel, and speaks your message:
+```text
+/tell user: @Amine text: join the game lobby!
+```
+* The bot speaks: `"Amine, join the game lobby!"`
+* If `@Amine` is in a voice channel, the bot automatically jumps into their voice room to deliver the message!
+
+### 3. `/tts [text] [language]`
+Quick shortcut alias for `/say`.
+
 ---
 
-## 🎤 How to Use
-1. Join any voice channel in your server.
-2. In any text channel, type:
-   * `/say text:Hello everyone!`
-   * Or specify a language: `/say text:Bonjour tout le monde language:French`
-3. The bot joins your voice channel, speaks the message, and leaves right after!
+## 🌐 Supported Languages
+* English (`en`) — Default
+* Arabic (`ar`)
+* French (`fr`)
+* Spanish (`es`)
+* German (`de`)
+* Japanese (`ja`)
+
+---
+
+## 🚀 Setup & Self-Hosting
+
+### Requirements
+* Node.js v18+
+* FFmpeg installed on system
+
+### Installation
+1. Clone the repository:
+   ```bash
+   git clone https://github.com/AmineLhb/TextToSpeech.git
+   cd TextToSpeech
+   ```
+2. Install dependencies:
+   ```bash
+   npm install
+   ```
+3. Create a `.env` file with your Discord Bot Token:
+   ```env
+   DISCORD_TOKEN=your_bot_token_here
+   ```
+4. Start the bot:
+   ```bash
+   node index.js
+   ```
+   *(Or double-click `run.bat` on Windows)*
+
+---
+
+## 🔒 Required Bot Permissions
+* View Channels
+* Send Messages
+* Connect
+* Speak
+* Use Application Commands (Slash Commands)
+* Gateway Intents: Server Members Intent, Message Content Intent
