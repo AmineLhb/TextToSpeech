@@ -222,6 +222,12 @@ client.on('interactionCreate', async interaction => {
     connection.on('stateChange', (oldState, newState) => {
       console.log(`[VOICE STATE] ${oldState.status} -> ${newState.status}`);
     });
+    connection.on('debug', msg => {
+      console.log(`[VOICE DEBUG] ${msg}`);
+    });
+    connection.on('error', err => {
+      console.error(`[VOICE ERROR]`, err);
+    });
 
     // Wait up to 25 seconds for Ready state
     await entersState(connection, VoiceConnectionStatus.Ready, 25_000);
