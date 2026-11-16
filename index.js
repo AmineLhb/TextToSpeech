@@ -206,8 +206,8 @@ client.on('interactionCreate', async interaction => {
     });
     await downloadAudio(audioUrl, tempFilePath);
 
-    // 2. Connect to voice cleanly (NO premature destroy)
-    console.log(`[TTS] Connecting to voice channel...`);
+    // 2. Connect to voice cleanly
+    console.log(`[TTS] Connecting to voice channel ${voiceChannel.name} (${voiceChannel.id})...`);
     connection = joinVoiceChannel({
       channelId: voiceChannel.id,
       guildId: voiceChannel.guild.id,
@@ -215,8 +215,12 @@ client.on('interactionCreate', async interaction => {
       selfDeaf: true,
     });
 
-    // Wait until Ready
-    await entersState(connection, VoiceConnectionStatus.Ready, 10_000);
+    connection.on('stateChange', (oldState, newState) => {
+      console.log(`[VOICE STATE] ${oldState.status} -> ${newState.status}`);
+    });
+
+    // Wait up to 25 seconds for Ready state
+    await entersState(connection, VoiceConnectionStatus.Ready, 25_000);
     console.log(`[TTS] Voice connection READY.`);
 
     // Buffer for Discord audio receiver
