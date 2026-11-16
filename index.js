@@ -118,6 +118,17 @@ function downloadAudio(url, destPath) {
 
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
+// Speech Queue: ensures rapid back-to-back /say or /tell commands never collide
+let ttsQueue = Promise.resolve();
+
+function queueTTS(channelId, text, lang) {
+  const task = ttsQueue.then(() => playTTS(channelId, text, lang)).catch(err => {
+    console.error('[Queue Error]:', err.message);
+  });
+  ttsQueue = task;
+  return task;
+}
+
 // Battle-tested playTTS function
 async function playTTS(channelId, text, lang) {
   const channel = await client.channels.fetch(channelId);
@@ -228,7 +239,7 @@ client.on('interactionCreate', async interaction => {
 
   try {
     console.log(`[TTS] Speaking "${spokenText}" in channel ${targetChannelId}...`);
-    await playTTS(targetChannelId, spokenText, lang);
+    await queueTTS(targetChannelId, spokenText, lang);
     console.log(`[TTS] Finished speaking successfully.`);
 
     try {
