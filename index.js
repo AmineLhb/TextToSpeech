@@ -141,7 +141,6 @@ client.on('interactionCreate', async interaction => {
   const { commandName } = interaction;
   if (commandName !== 'say' && commandName !== 'tell' && commandName !== 'tts') return;
 
-  // Safe reply helper so interaction collisions never crash or break audio
   const safeReply = async (content, ephemeral = false) => {
     try {
       if (interaction.deferred) {
@@ -149,9 +148,7 @@ client.on('interactionCreate', async interaction => {
       } else if (!interaction.replied) {
         await interaction.reply(typeof content === 'string' ? { content, ephemeral } : content);
       }
-    } catch (e) {
-      console.warn('[SafeReply Skipped]:', e.message);
-    }
+    } catch (e) {}
   };
 
   const text = interaction.options.getString('text');
@@ -186,19 +183,10 @@ client.on('interactionCreate', async interaction => {
     replyMessage = `🗣️ Speaking in <#${voiceChannel.id}>: "${text}"`;
   }
 
-  // Check bot permissions
-  const botMember = interaction.guild.members.me;
-  const permissions = voiceChannel.permissionsFor(botMember);
-  if (!permissions.has(PermissionsBitField.Flags.Connect) || !permissions.has(PermissionsBitField.Flags.Speak)) {
-    return safeReply('❌ I do not have permission to Connect & Speak in that voice channel!', true);
-  }
-
   // Acknowledge interaction quickly
   try {
     await interaction.deferReply();
-  } catch (e) {
-    console.warn('[Defer Warning]:', e.message);
-  }
+  } catch (e) {}
 
   const tempFilePath = path.join(
     __dirname,
@@ -208,7 +196,7 @@ client.on('interactionCreate', async interaction => {
   let connection = null;
 
   try {
-    console.log(`[TTS] Request: "${spokenText}" (${lang}) in channel ${voiceChannel.name} (${voiceChannel.id})`);
+    console.log(`[TTS] Request: "${spokenText}" (${lang}) in channel ${voiceChannel.name}`);
 
     // 1. Download TTS Audio
     const audioUrl = googleTTS.getAudioUrl(spokenText, {
@@ -217,36 +205,24 @@ client.on('interactionCreate', async interaction => {
       host: 'https://translate.google.com',
     });
     await downloadAudio(audioUrl, tempFilePath);
-    console.log(`[TTS] Audio downloaded successfully.`);
 
-    // 2. Clean up any stale connection first
-    const oldConnection = getVoiceConnection(interaction.guild.id);
-    if (oldConnection) {
-      try {
-        oldConnection.destroy();
-      } catch (e) {}
-      await sleep(200);
-    }
-
-    // 3. Connect to voice
+    // 2. Connect to voice cleanly (NO premature destroy)
     console.log(`[TTS] Connecting to voice channel...`);
     connection = joinVoiceChannel({
       channelId: voiceChannel.id,
-      guildId: interaction.guild.id,
-      adapterCreator: interaction.guild.voiceAdapterCreator,
+      guildId: voiceChannel.guild.id,
+      adapterCreator: voiceChannel.guild.voiceAdapterCreator,
       selfDeaf: true,
     });
 
     // Wait until Ready
-    if (connection.state.status !== VoiceConnectionStatus.Ready) {
-      await entersState(connection, VoiceConnectionStatus.Ready, 10_000);
-    }
+    await entersState(connection, VoiceConnectionStatus.Ready, 10_000);
     console.log(`[TTS] Voice connection READY.`);
 
-    // Buffer for audio pipeline
+    // Buffer for Discord audio receiver
     await sleep(400);
 
-    // 4. Play audio
+    // 3. Play audio
     const player = createAudioPlayer();
     const resource = createAudioResource(tempFilePath);
 
@@ -256,39 +232,33 @@ client.on('interactionCreate', async interaction => {
 
     await safeReply(replyMessage);
 
-    // 5. Cleanup when idle
+    // 4. Cleanup when finished
     player.on(AudioPlayerStatus.Idle, () => {
       console.log(`[TTS] Finished speaking, disconnecting.`);
       setTimeout(() => {
         try {
-          if (connection && connection.state.status !== VoiceConnectionStatus.Destroyed) {
-            connection.destroy();
-          }
+          connection.destroy();
         } catch (e) {}
         if (fs.existsSync(tempFilePath)) {
           fs.unlinkSync(tempFilePath);
         }
-      }, 400);
+      }, 500);
     });
 
     player.on('error', error => {
       console.error('[TTS Player Error]:', error);
       try {
-        if (connection && connection.state.status !== VoiceConnectionStatus.Destroyed) {
-          connection.destroy();
-        }
+        connection.destroy();
       } catch (e) {}
       if (fs.existsSync(tempFilePath)) {
         fs.unlinkSync(tempFilePath);
       }
     });
 
-    // Fallback safety timeout (30 seconds)
+    // Safety timeout (30s)
     setTimeout(() => {
       try {
-        if (connection && connection.state.status !== VoiceConnectionStatus.Destroyed) {
-          connection.destroy();
-        }
+        connection.destroy();
       } catch (e) {}
       if (fs.existsSync(tempFilePath)) {
         fs.unlinkSync(tempFilePath);
@@ -296,16 +266,13 @@ client.on('interactionCreate', async interaction => {
     }, 30_000);
 
   } catch (error) {
-    console.error('[TTS Catch Error]:', error);
+    console.error('[TTS Catch Error]:', error.message);
     try {
-      if (connection && connection.state.status !== VoiceConnectionStatus.Destroyed) {
-        connection.destroy();
-      }
+      if (connection) connection.destroy();
     } catch (e) {}
     if (fs.existsSync(tempFilePath)) {
       fs.unlinkSync(tempFilePath);
     }
-
     await safeReply(`❌ Error speaking text: ${error.message}`);
   }
 });
