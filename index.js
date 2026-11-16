@@ -5,11 +5,9 @@ const {
   REST,
   Routes,
   SlashCommandBuilder,
-  PermissionsBitField,
 } = require('discord.js');
 const {
   joinVoiceChannel,
-  getVoiceConnection,
   createAudioPlayer,
   createAudioResource,
   AudioPlayerStatus,
@@ -120,6 +118,51 @@ function downloadAudio(url, destPath) {
 
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
+// Battle-tested playTTS function
+async function playTTS(channelId, text, lang) {
+  const channel = await client.channels.fetch(channelId);
+  const tempPath = path.join(__dirname, `temp_tts_${Date.now()}_${Math.random().toString(36).substring(7)}.mp3`);
+  
+  const audioUrl = googleTTS.getAudioUrl(text, {
+    lang: lang || 'en',
+    slow: false,
+    host: 'https://translate.google.com',
+  });
+  await downloadAudio(audioUrl, tempPath);
+
+  const connection = joinVoiceChannel({
+    channelId: channel.id,
+    guildId: channel.guild.id,
+    adapterCreator: channel.guild.voiceAdapterCreator,
+    selfDeaf: true,
+  });
+
+  await entersState(connection, VoiceConnectionStatus.Ready, 20_000);
+  await sleep(300);
+
+  const player = createAudioPlayer();
+  const resource = createAudioResource(tempPath);
+  connection.subscribe(player);
+  player.play(resource);
+
+  return new Promise((resolve) => {
+    player.on(AudioPlayerStatus.Idle, () => {
+      setTimeout(() => {
+        try { connection.destroy(); } catch (e) {}
+        if (fs.existsSync(tempPath)) fs.unlinkSync(tempPath);
+        resolve();
+      }, 500);
+    });
+
+    player.on('error', err => {
+      console.error('[Audio Player Error]:', err);
+      try { connection.destroy(); } catch (e) {}
+      if (fs.existsSync(tempPath)) fs.unlinkSync(tempPath);
+      resolve();
+    });
+  });
+}
+
 client.once('clientReady', async () => {
   console.log(`✅ Logged in as ${client.user.tag}!`);
 
@@ -141,20 +184,10 @@ client.on('interactionCreate', async interaction => {
   const { commandName } = interaction;
   if (commandName !== 'say' && commandName !== 'tell' && commandName !== 'tts') return;
 
-  const safeReply = async (content, ephemeral = false) => {
-    try {
-      if (interaction.deferred) {
-        await interaction.editReply(content);
-      } else if (!interaction.replied) {
-        await interaction.reply(typeof content === 'string' ? { content, ephemeral } : content);
-      }
-    } catch (e) {}
-  };
-
   const text = interaction.options.getString('text');
   const lang = interaction.options.getString('language') || 'en';
 
-  let voiceChannel = null;
+  let targetChannelId = null;
   let spokenText = text;
   let replyMessage = '';
 
@@ -164,130 +197,54 @@ client.on('interactionCreate', async interaction => {
     const nameToCall = targetMember?.displayName || targetUser.globalName || targetUser.username;
     spokenText = `${nameToCall}, ${text}`;
 
-    if (targetMember?.voice?.channel) {
-      voiceChannel = targetMember.voice.channel;
-    } else if (interaction.member?.voice?.channel) {
-      voiceChannel = interaction.member.voice.channel;
+    if (targetMember?.voice?.channelId) {
+      targetChannelId = targetMember.voice.channelId;
+    } else if (interaction.member?.voice?.channelId) {
+      targetChannelId = interaction.member.voice.channelId;
     } else {
-      return safeReply(`❌ Neither you nor **${nameToCall}** is in a voice channel!`, true);
+      return interaction.reply({
+        content: `❌ Neither you nor **${nameToCall}** is in a voice channel!`,
+        ephemeral: true,
+      });
     }
 
-    replyMessage = `📣 Calling **${nameToCall}** in <#${voiceChannel.id}>: "${text}"`;
+    replyMessage = `📣 Calling **${nameToCall}** in <#${targetChannelId}>: "${text}"`;
   } else {
-    voiceChannel = interaction.member?.voice?.channel;
-    if (!voiceChannel) {
-      return safeReply('❌ You must be in a voice channel to use this command!', true);
+    if (!interaction.member?.voice?.channelId) {
+      return interaction.reply({
+        content: '❌ You must be in a voice channel to use this command!',
+        ephemeral: true,
+      });
     }
 
+    targetChannelId = interaction.member.voice.channelId;
     spokenText = text;
-    replyMessage = `🗣️ Speaking in <#${voiceChannel.id}>: "${text}"`;
+    replyMessage = `🗣️ Speaking in <#${targetChannelId}>: "${text}"`;
   }
 
-  // Acknowledge interaction quickly
   try {
     await interaction.deferReply();
   } catch (e) {}
 
-  const tempFilePath = path.join(
-    __dirname,
-    `temp_tts_${Date.now()}_${Math.random().toString(36).substring(7)}.mp3`
-  );
-
-  let connection = null;
-
   try {
-    console.log(`[TTS] Request: "${spokenText}" (${lang}) in channel ${voiceChannel.name}`);
+    console.log(`[TTS] Speaking "${spokenText}" in channel ${targetChannelId}...`);
+    await playTTS(targetChannelId, spokenText, lang);
+    console.log(`[TTS] Finished speaking successfully.`);
 
-    // 1. Download TTS Audio
-    const audioUrl = googleTTS.getAudioUrl(spokenText, {
-      lang: lang,
-      slow: false,
-      host: 'https://translate.google.com',
-    });
-    await downloadAudio(audioUrl, tempFilePath);
-
-    // 2. Fetch full live channel & guild directly from client
-    const targetChannelId = voiceChannel.id;
-    const guild = client.guilds.cache.get(interaction.guildId) || (await client.guilds.fetch(interaction.guildId));
-    const channel = await client.channels.fetch(targetChannelId);
-
-    console.log(`[TTS] Connecting to voice channel ${channel.name} (${channel.id})...`);
-    connection = joinVoiceChannel({
-      channelId: channel.id,
-      guildId: guild.id,
-      adapterCreator: guild.voiceAdapterCreator,
-      selfDeaf: true,
-    });
-
-    connection.on('stateChange', (oldState, newState) => {
-      console.log(`[VOICE STATE] ${oldState.status} -> ${newState.status}`);
-    });
-    connection.on('debug', msg => {
-      console.log(`[VOICE DEBUG] ${msg}`);
-    });
-    connection.on('error', err => {
-      console.error(`[VOICE ERROR]`, err);
-    });
-
-    // Wait up to 25 seconds for Ready state
-    await entersState(connection, VoiceConnectionStatus.Ready, 25_000);
-    console.log(`[TTS] Voice connection READY.`);
-
-    // Buffer for Discord audio receiver
-    await sleep(400);
-
-    // 3. Play audio
-    const player = createAudioPlayer();
-    const resource = createAudioResource(tempFilePath);
-
-    player.play(resource);
-    connection.subscribe(player);
-    console.log(`[TTS] Audio playing...`);
-
-    await safeReply(replyMessage);
-
-    // 4. Cleanup when finished
-    player.on(AudioPlayerStatus.Idle, () => {
-      console.log(`[TTS] Finished speaking, disconnecting.`);
-      setTimeout(() => {
-        try {
-          connection.destroy();
-        } catch (e) {}
-        if (fs.existsSync(tempFilePath)) {
-          fs.unlinkSync(tempFilePath);
-        }
-      }, 500);
-    });
-
-    player.on('error', error => {
-      console.error('[TTS Player Error]:', error);
-      try {
-        connection.destroy();
-      } catch (e) {}
-      if (fs.existsSync(tempFilePath)) {
-        fs.unlinkSync(tempFilePath);
-      }
-    });
-
-    // Safety timeout (30s)
-    setTimeout(() => {
-      try {
-        connection.destroy();
-      } catch (e) {}
-      if (fs.existsSync(tempFilePath)) {
-        fs.unlinkSync(tempFilePath);
-      }
-    }, 30_000);
-
-  } catch (error) {
-    console.error('[TTS Catch Error]:', error.message);
     try {
-      if (connection) connection.destroy();
+      if (interaction.deferred) {
+        await interaction.editReply(replyMessage);
+      } else if (!interaction.replied) {
+        await interaction.reply(replyMessage);
+      }
     } catch (e) {}
-    if (fs.existsSync(tempFilePath)) {
-      fs.unlinkSync(tempFilePath);
-    }
-    await safeReply(`❌ Error speaking text: ${error.message}`);
+  } catch (error) {
+    console.error('[TTS Execution Error]:', error.message);
+    try {
+      if (interaction.deferred) {
+        await interaction.editReply(`❌ Error speaking text: ${error.message}`);
+      }
+    } catch (e) {}
   }
 });
 
