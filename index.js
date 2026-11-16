@@ -122,13 +122,16 @@ const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 function normalizeTextForSpeech(text, lang) {
   if (!lang || lang === 'en') {
     let clean = text;
-    // Fix words that Google TTS confuses with English government/corporate acronyms
+    // Fix words that English phonotactics can't pronounce without a leading vowel
     clean = clean
-      .replace(/\bnsa\b/gi, 'nssa')
-      .replace(/\bnta\b/gi, 'ntta')
-      .replace(/\bnti\b/gi, 'ntti')
-      .replace(/\bmsa\b/gi, 'mssa')
-      .replace(/\bdia\b/gi, 'diya');
+      .replace(/\bnsa\b/gi, 'ensa')
+      .replace(/\bnsat\b/gi, 'ensat')
+      .replace(/\bnsaw\b/gi, 'ensaw')
+      .replace(/\bnsina\b/gi, 'ensina')
+      .replace(/\bnta\b/gi, 'enta')
+      .replace(/\bnti\b/gi, 'enti')
+      .replace(/\bntoma\b/gi, 'entoma')
+      .replace(/\bmsa\b/gi, 'emsa');
 
     // Convert Arabizi numbers (7 -> h, 9 -> q, 5 -> kh, 3 -> aa)
     // so the bot speaks Arabic sounds instead of saying "seven", "three", etc.
