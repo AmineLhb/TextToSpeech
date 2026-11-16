@@ -33,12 +33,24 @@ http
     console.log(`📡 Health-check server listening on port ${port}`);
   });
 
+// Global process error handlers so the bot never crashes
+process.on('unhandledRejection', error => {
+  console.error('[Unhandled Rejection]:', error);
+});
+process.on('uncaughtException', error => {
+  console.error('[Uncaught Exception]:', error);
+});
+
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
     GatewayIntentBits.GuildVoiceStates,
     GatewayIntentBits.GuildMessages,
   ],
+});
+
+client.on('error', error => {
+  console.error('[Discord Client Error]:', error);
 });
 
 const languageChoices = [
@@ -177,8 +189,6 @@ client.on('interactionCreate', async interaction => {
     });
   }
 
-  await interaction.deferReply();
-
   const tempFilePath = path.join(
     __dirname,
     `temp_tts_${Date.now()}_${Math.random().toString(36).substring(7)}.mp3`
@@ -187,6 +197,11 @@ client.on('interactionCreate', async interaction => {
   let connection = null;
 
   try {
+    try {
+      await interaction.deferReply();
+    } catch (e) {
+      console.warn('Could not defer reply (interaction may have expired or been handled):', e.message);
+    }
     console.log(`[TTS] Request: "${spokenText}" (${lang}) in channel ${voiceChannel.name} (${voiceChannel.id})`);
 
     // 1. Download TTS Audio
